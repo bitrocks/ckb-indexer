@@ -1,5 +1,5 @@
+mod postgresql;
 mod rocksdb;
-
 pub use self::rocksdb::RocksdbStore;
 
 #[derive(Debug)]

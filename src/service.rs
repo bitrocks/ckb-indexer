@@ -1,4 +1,7 @@
-use crate::indexer::{Indexer, Key, KeyPrefix, Value};
+use crate::indexer::{
+    kv_indexer::{Key, KeyPrefix, KvIndexer, Value},
+    Indexer,
+};
 use crate::store::{IteratorDirection, Store};
 use ckb_jsonrpc_types::{BlockNumber, BlockView, CellOutput, JsonBytes, OutPoint, Script, Uint32};
 use ckb_types::{packed, prelude::*, H256};
@@ -15,12 +18,11 @@ use std::net::ToSocketAddrs;
 use std::thread;
 use std::time::Duration;
 
-pub struct Service<S> {
-    store: S,
+pub struct Service<T> {
+    indexer: T,
     poll_interval: Duration,
     listen_address: String,
 }
-
 impl<S: Store + Clone + Send + Sync + 'static> Service<S> {
     pub fn new(store_path: &str, listen_address: &str, poll_interval: Duration) -> Self {
         let store = S::new(store_path);
@@ -31,32 +33,32 @@ impl<S: Store + Clone + Send + Sync + 'static> Service<S> {
         }
     }
 
-    pub fn start(&self) -> Server {
-        let mut io_handler = IoHandler::new();
-        let rpc_impl = IndexerRpcImpl {
-            store: self.store.clone(),
-        };
-        io_handler.extend_with(rpc_impl.to_delegate());
+    // pub fn start(&self) -> Server {
+    //     let mut io_handler = IoHandler::new();
+    //     let rpc_impl = IndexerRpcImpl {
+    //         store: self.store.clone(),
+    //     };
+    //     io_handler.extend_with(rpc_impl.to_delegate());
 
-        ServerBuilder::new(io_handler)
-            .cors(DomainsValidation::AllowOnly(vec![
-                AccessControlAllowOrigin::Null,
-                AccessControlAllowOrigin::Any,
-            ]))
-            .health_api(("/ping", "ping"))
-            .start_http(
-                &self
-                    .listen_address
-                    .to_socket_addrs()
-                    .expect("config listen_address parsed")
-                    .next()
-                    .expect("config listen_address parsed"),
-            )
-            .expect("Start Jsonrpc HTTP service")
-    }
+    //     ServerBuilder::new(io_handler)
+    //         .cors(DomainsValidation::AllowOnly(vec![
+    //             AccessControlAllowOrigin::Null,
+    //             AccessControlAllowOrigin::Any,
+    //         ]))
+    //         .health_api(("/ping", "ping"))
+    //         .start_http(
+    //             &self
+    //                 .listen_address
+    //                 .to_socket_addrs()
+    //                 .expect("config listen_address parsed")
+    //                 .next()
+    //                 .expect("config listen_address parsed"),
+    //         )
+    //         .expect("Start Jsonrpc HTTP service")
+    // }
 
     pub fn poll(&self, rpc_client: gen_client::Client) {
-        let indexer = Indexer::new(self.store.clone(), 100, 1000);
+        let indexer = self.indexer;
         loop {
             if let Some((tip_number, tip_hash)) = indexer.tip().unwrap() {
                 if let Ok(Some(block)) = rpc_client
