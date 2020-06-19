@@ -1,5 +1,5 @@
 use super::*;
-use crate::store::{Batch, IteratorDirection, Store};
+use crate::store::{Batch, IteratorDirection, RocksdbStore, Store};
 use ckb_types::{
     core::{BlockNumber, BlockView},
     packed::{Byte32, Bytes, CellOutput, OutPoint, Script},
@@ -189,16 +189,14 @@ pub struct KvIndexer<S> {
     prune_interval: u64,
 }
 
-impl<S> Indexer<S> for KvIndexer<S>
-where
-    S: Store,
-{
-    fn new(store: S, keep_num: u64, prune_interval: u64) -> Self {
-        Self {
+impl Indexer for KvIndexer<RocksdbStore> {
+    fn new(db_config: &str, keep_num: u64, prune_interval: u64) -> Result<Self, Error> {
+        let store = RocksdbStore::new(db_config);
+        Ok(Self {
             store,
             keep_num,
             prune_interval,
-        }
+        })
     }
 
     fn append(&self, block: &BlockView) -> Result<(), Error> {
@@ -693,15 +691,16 @@ mod tests {
     };
     use tempfile;
 
-    fn new_indexer<S: Store>(prefix: &str) -> KvIndexer<S> {
+    fn new_indexer(prefix: &str) -> KvIndexer<RocksdbStore> {
         let tmp_dir = tempfile::Builder::new().prefix(prefix).tempdir().unwrap();
-        let store = S::new(tmp_dir.path().to_str().unwrap());
-        Indexer::new(store, 10, 1)
+        let db_config = tmp_dir.path().to_str().unwrap();
+        // let store = S::new(tmp_dir.path().to_str().unwrap());
+        KvIndexer::new(db_config, 10, 1).unwrap()
     }
 
     #[test]
     fn append_and_rollback_to_empty() {
-        let indexer = new_indexer::<RocksdbStore>("append_and_rollback_to_empty");
+        let indexer = new_indexer("append_and_rollback_to_empty");
 
         let lock_script1 = ScriptBuilder::default()
             .code_hash(H256(rand::random()).pack())
@@ -784,7 +783,7 @@ mod tests {
 
     #[test]
     fn append_two_blocks_and_rollback_one() {
-        let indexer = new_indexer::<RocksdbStore>("append_two_blocks_and_rollback_one");
+        let indexer = new_indexer("append_two_blocks_and_rollback_one");
 
         let lock_script1 = ScriptBuilder::default()
             .code_hash(H256(rand::random()).pack())
@@ -941,7 +940,7 @@ mod tests {
 
     #[test]
     fn consume_output_in_same_block() {
-        let indexer = new_indexer::<RocksdbStore>("consume_output_in_same_block");
+        let indexer = new_indexer("consume_output_in_same_block");
 
         let lock_script1 = ScriptBuilder::default()
             .code_hash(H256(rand::random()).pack())
@@ -1105,7 +1104,7 @@ mod tests {
 
     #[test]
     fn prune() {
-        let indexer = new_indexer::<RocksdbStore>("prune");
+        let indexer = new_indexer("prune");
 
         let lock_script1 = ScriptBuilder::default()
             .code_hash(H256(rand::random()).pack())
@@ -1252,7 +1251,7 @@ mod tests {
 
     #[test]
     fn append_and_rollback_with_cellbase() {
-        let indexer = new_indexer::<RocksdbStore>("append_and_rollback_with_cellbase");
+        let indexer = new_indexer("append_and_rollback_with_cellbase");
 
         let lock_script1 = ScriptBuilder::default()
             .code_hash(H256(rand::random()).pack())

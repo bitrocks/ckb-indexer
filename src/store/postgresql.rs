@@ -1,12 +1,12 @@
 use super::Error;
 use postgres::{Client, NoTls};
 
-pub struct PostgresStore<'a> {
-    db: &'a Client,
+pub struct PostgresqlStore {
+    db: Client,
 }
 
-impl<'a> PostgresStore<'a> {
-    pub fn new(client: &'a Client) -> Result<Self, Error> {
+impl PostgresqlStore {
+    pub fn new(client: Client) -> Result<Self, Error> {
         Ok(Self { db: client })
     }
 }

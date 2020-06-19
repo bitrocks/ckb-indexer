@@ -18,16 +18,16 @@ use std::net::ToSocketAddrs;
 use std::thread;
 use std::time::Duration;
 
-pub struct Service<T> {
+pub struct Service<T: Indexer> {
     indexer: T,
     poll_interval: Duration,
     listen_address: String,
 }
-impl<S: Store + Clone + Send + Sync + 'static> Service<S> {
+impl<S: Indexer + Clone + Send + Sync + 'static> Service<S> {
     pub fn new(store_path: &str, listen_address: &str, poll_interval: Duration) -> Self {
-        let store = S::new(store_path);
+        let indexer = S::new(store_path, 100, 10000).unwrap();
         Self {
-            store,
+            indexer,
             listen_address: listen_address.to_string(),
             poll_interval,
         }
@@ -58,7 +58,7 @@ impl<S: Store + Clone + Send + Sync + 'static> Service<S> {
     // }
 
     pub fn poll(&self, rpc_client: gen_client::Client) {
-        let indexer = self.indexer;
+        let indexer = &self.indexer;
         loop {
             if let Some((tip_number, tip_hash)) = indexer.tip().unwrap() {
                 if let Ok(Some(block)) = rpc_client
@@ -164,213 +164,213 @@ pub struct Pagination<T> {
     last_cursor: JsonBytes,
 }
 
-struct IndexerRpcImpl<S> {
-    store: S,
+struct IndexerRpcImpl<T> {
+    store: T,
 }
 
-impl<S: Store + Send + Sync + 'static> IndexerRpc for IndexerRpcImpl<S> {
-    fn get_cells(
-        &self,
-        search_key: SearchKey,
-        order: Order,
-        limit: Uint32,
-        after_cursor: Option<JsonBytes>,
-    ) -> Result<Pagination<Cell>> {
-        let mut prefix = match search_key.script_type {
-            ScriptType::Lock => vec![KeyPrefix::CellLockScript as u8],
-            ScriptType::Type => vec![KeyPrefix::CellTypeScript as u8],
-        };
-        let script: packed::Script = search_key.script.into();
-        let args_len = search_key
-            .args_len
-            .map_or_else(|| script.args().len(), |args_len| args_len.value() as usize);
-        if args_len < script.args().len() {
-            return Err(Error::invalid_params(
-                "args_len should be greater than or equal to script.args.len",
-            ));
-        }
-        if args_len > u16::max_value() as usize {
-            return Err(Error::invalid_params("args_len should be less than 65535"));
-        }
-        prefix.extend_from_slice(script.code_hash().as_slice());
-        prefix.extend_from_slice(script.hash_type().as_slice());
-        prefix.extend_from_slice(&(args_len as u32).to_le_bytes());
-        prefix.extend_from_slice(&script.args().raw_data());
+// impl<S: Store + Send + Sync + 'static> IndexerRpc for IndexerRpcImpl<S> {
+//     fn get_cells(
+//         &self,
+//         search_key: SearchKey,
+//         order: Order,
+//         limit: Uint32,
+//         after_cursor: Option<JsonBytes>,
+//     ) -> Result<Pagination<Cell>> {
+//         let mut prefix = match search_key.script_type {
+//             ScriptType::Lock => vec![KeyPrefix::CellLockScript as u8],
+//             ScriptType::Type => vec![KeyPrefix::CellTypeScript as u8],
+//         };
+//         let script: packed::Script = search_key.script.into();
+//         let args_len = search_key
+//             .args_len
+//             .map_or_else(|| script.args().len(), |args_len| args_len.value() as usize);
+//         if args_len < script.args().len() {
+//             return Err(Error::invalid_params(
+//                 "args_len should be greater than or equal to script.args.len",
+//             ));
+//         }
+//         if args_len > u16::max_value() as usize {
+//             return Err(Error::invalid_params("args_len should be less than 65535"));
+//         }
+//         prefix.extend_from_slice(script.code_hash().as_slice());
+//         prefix.extend_from_slice(script.hash_type().as_slice());
+//         prefix.extend_from_slice(&(args_len as u32).to_le_bytes());
+//         prefix.extend_from_slice(&script.args().raw_data());
 
-        let remain_args_len = args_len - script.args().len();
-        let (from_key, direction, skip) = match order {
-            Order::Asc => {
-                (after_cursor.map_or_else(
-                    || (prefix.clone(), IteratorDirection::Forward, 0),
-                    |json_bytes| (json_bytes.as_bytes().into(), IteratorDirection::Forward, 1),
-                ))
-            }
-            Order::Desc => {
-                (after_cursor.map_or_else(
-                    // 16 is BlockNumber + TxIndex + OutputIndex length
-                    || {
-                        (
-                            [prefix.clone(), vec![0xff; remain_args_len + 16]].concat(),
-                            IteratorDirection::Reverse,
-                            0,
-                        )
-                    },
-                    |json_bytes| (json_bytes.as_bytes().into(), IteratorDirection::Reverse, 1),
-                ))
-            }
-        };
+//         let remain_args_len = args_len - script.args().len();
+//         let (from_key, direction, skip) = match order {
+//             Order::Asc => {
+//                 (after_cursor.map_or_else(
+//                     || (prefix.clone(), IteratorDirection::Forward, 0),
+//                     |json_bytes| (json_bytes.as_bytes().into(), IteratorDirection::Forward, 1),
+//                 ))
+//             }
+//             Order::Desc => {
+//                 (after_cursor.map_or_else(
+//                     // 16 is BlockNumber + TxIndex + OutputIndex length
+//                     || {
+//                         (
+//                             [prefix.clone(), vec![0xff; remain_args_len + 16]].concat(),
+//                             IteratorDirection::Reverse,
+//                             0,
+//                         )
+//                     },
+//                     |json_bytes| (json_bytes.as_bytes().into(), IteratorDirection::Reverse, 1),
+//                 ))
+//             }
+//         };
 
-        let iter = self
-            .store
-            .iter(&from_key, direction)
-            .expect("indexer store should be OK")
-            .skip(skip);
+//         let iter = self
+//             .store
+//             .iter(&from_key, direction)
+//             .expect("indexer store should be OK")
+//             .skip(skip);
 
-        let kvs = iter
-            .take(limit.value() as usize)
-            .take_while(|(key, _value)| key.starts_with(&prefix))
-            .collect::<Vec<_>>();
+//         let kvs = iter
+//             .take(limit.value() as usize)
+//             .take_while(|(key, _value)| key.starts_with(&prefix))
+//             .collect::<Vec<_>>();
 
-        let cells = kvs
-            .iter()
-            .map(|(key, value)| {
-                let tx_hash = packed::Byte32::from_slice(value).expect("stored tx hash");
-                let index =
-                    u32::from_be_bytes(key[key.len() - 4..].try_into().expect("stored index"));
-                let out_point = packed::OutPoint::new(tx_hash, index);
-                let (block_number, tx_index, output, output_data) = Value::parse_cell_value(
-                    &self
-                        .store
-                        .get(Key::OutPoint(&out_point).into_vec())
-                        .unwrap()
-                        .unwrap(),
-                );
-                Cell {
-                    output: output.into(),
-                    output_data: output_data.into(),
-                    out_point: out_point.into(),
-                    block_number: block_number.into(),
-                    tx_index: tx_index.into(),
-                }
-            })
-            .collect::<Vec<Cell>>();
+//         let cells = kvs
+//             .iter()
+//             .map(|(key, value)| {
+//                 let tx_hash = packed::Byte32::from_slice(value).expect("stored tx hash");
+//                 let index =
+//                     u32::from_be_bytes(key[key.len() - 4..].try_into().expect("stored index"));
+//                 let out_point = packed::OutPoint::new(tx_hash, index);
+//                 let (block_number, tx_index, output, output_data) = Value::parse_cell_value(
+//                     &self
+//                         .store
+//                         .get(Key::OutPoint(&out_point).into_vec())
+//                         .unwrap()
+//                         .unwrap(),
+//                 );
+//                 Cell {
+//                     output: output.into(),
+//                     output_data: output_data.into(),
+//                     out_point: out_point.into(),
+//                     block_number: block_number.into(),
+//                     tx_index: tx_index.into(),
+//                 }
+//             })
+//             .collect::<Vec<Cell>>();
 
-        let last_cursor = kvs.last().map_or_else(
-            || JsonBytes::default(),
-            |(last_key, _last_value)| JsonBytes::from_vec(last_key.clone().into()),
-        );
+//         let last_cursor = kvs.last().map_or_else(
+//             || JsonBytes::default(),
+//             |(last_key, _last_value)| JsonBytes::from_vec(last_key.clone().into()),
+//         );
 
-        Ok(Pagination {
-            objects: cells,
-            last_cursor,
-        })
-    }
+//         Ok(Pagination {
+//             objects: cells,
+//             last_cursor,
+//         })
+//     }
 
-    fn get_transactions(
-        &self,
-        search_key: SearchKey,
-        order: Order,
-        limit: Uint32,
-        after_cursor: Option<JsonBytes>,
-    ) -> Result<Pagination<Tx>> {
-        let mut prefix = match search_key.script_type {
-            ScriptType::Lock => vec![KeyPrefix::TxLockScript as u8],
-            ScriptType::Type => vec![KeyPrefix::TxTypeScript as u8],
-        };
-        let script: packed::Script = search_key.script.into();
-        let args_len = search_key
-            .args_len
-            .map_or_else(|| script.args().len(), |args_len| args_len.value() as usize);
-        if args_len < script.args().len() {
-            return Err(Error::invalid_params(
-                "args_len should be greater than or equal to script.args.len",
-            ));
-        }
-        if args_len > u16::max_value() as usize {
-            return Err(Error::invalid_params("args_len should be less than 65535"));
-        }
-        prefix.extend_from_slice(script.code_hash().as_slice());
-        prefix.extend_from_slice(script.hash_type().as_slice());
-        prefix.extend_from_slice(&(args_len as u32).to_le_bytes());
-        prefix.extend_from_slice(&script.args().raw_data());
+//     fn get_transactions(
+//         &self,
+//         search_key: SearchKey,
+//         order: Order,
+//         limit: Uint32,
+//         after_cursor: Option<JsonBytes>,
+//     ) -> Result<Pagination<Tx>> {
+//         let mut prefix = match search_key.script_type {
+//             ScriptType::Lock => vec![KeyPrefix::TxLockScript as u8],
+//             ScriptType::Type => vec![KeyPrefix::TxTypeScript as u8],
+//         };
+//         let script: packed::Script = search_key.script.into();
+//         let args_len = search_key
+//             .args_len
+//             .map_or_else(|| script.args().len(), |args_len| args_len.value() as usize);
+//         if args_len < script.args().len() {
+//             return Err(Error::invalid_params(
+//                 "args_len should be greater than or equal to script.args.len",
+//             ));
+//         }
+//         if args_len > u16::max_value() as usize {
+//             return Err(Error::invalid_params("args_len should be less than 65535"));
+//         }
+//         prefix.extend_from_slice(script.code_hash().as_slice());
+//         prefix.extend_from_slice(script.hash_type().as_slice());
+//         prefix.extend_from_slice(&(args_len as u32).to_le_bytes());
+//         prefix.extend_from_slice(&script.args().raw_data());
 
-        let remain_args_len = args_len - script.args().len();
-        let (from_key, direction, skip) = match order {
-            Order::Asc => {
-                (after_cursor.map_or_else(
-                    || (prefix.clone(), IteratorDirection::Forward, 0),
-                    |json_bytes| (json_bytes.as_bytes().into(), IteratorDirection::Forward, 1),
-                ))
-            }
-            Order::Desc => {
-                (after_cursor.map_or_else(
-                    // 17 is BlockNumber + TxIndex + IOIndex + IOType length
-                    || {
-                        (
-                            [prefix.clone(), vec![0xff; remain_args_len + 17]].concat(),
-                            IteratorDirection::Reverse,
-                            0,
-                        )
-                    },
-                    |json_bytes| (json_bytes.as_bytes().into(), IteratorDirection::Reverse, 1),
-                ))
-            }
-        };
+//         let remain_args_len = args_len - script.args().len();
+//         let (from_key, direction, skip) = match order {
+//             Order::Asc => {
+//                 (after_cursor.map_or_else(
+//                     || (prefix.clone(), IteratorDirection::Forward, 0),
+//                     |json_bytes| (json_bytes.as_bytes().into(), IteratorDirection::Forward, 1),
+//                 ))
+//             }
+//             Order::Desc => {
+//                 (after_cursor.map_or_else(
+//                     // 17 is BlockNumber + TxIndex + IOIndex + IOType length
+//                     || {
+//                         (
+//                             [prefix.clone(), vec![0xff; remain_args_len + 17]].concat(),
+//                             IteratorDirection::Reverse,
+//                             0,
+//                         )
+//                     },
+//                     |json_bytes| (json_bytes.as_bytes().into(), IteratorDirection::Reverse, 1),
+//                 ))
+//             }
+//         };
 
-        let iter = self
-            .store
-            .iter(&from_key, direction)
-            .expect("indexer store should be OK")
-            .skip(skip);
+//         let iter = self
+//             .store
+//             .iter(&from_key, direction)
+//             .expect("indexer store should be OK")
+//             .skip(skip);
 
-        let kvs = iter
-            .take_while(|(key, _value)| key.starts_with(&prefix))
-            .take(limit.value() as usize)
-            .collect::<Vec<_>>();
+//         let kvs = iter
+//             .take_while(|(key, _value)| key.starts_with(&prefix))
+//             .take(limit.value() as usize)
+//             .collect::<Vec<_>>();
 
-        let txs = kvs
-            .iter()
-            .map(|(key, value)| {
-                let tx_hash = packed::Byte32::from_slice(value).expect("stored tx hash");
-                let block_number = u64::from_be_bytes(
-                    key[key.len() - 17..key.len() - 9]
-                        .try_into()
-                        .expect("stored block_number"),
-                );
-                let tx_index = u32::from_be_bytes(
-                    key[key.len() - 9..key.len() - 5]
-                        .try_into()
-                        .expect("stored tx_index"),
-                );
-                let io_index = u32::from_be_bytes(
-                    key[key.len() - 5..key.len() - 1]
-                        .try_into()
-                        .expect("stored io_index"),
-                );
-                let io_type = if *key.last().expect("stored io_type") == 0 {
-                    IOType::Input
-                } else {
-                    IOType::Output
-                };
+//         let txs = kvs
+//             .iter()
+//             .map(|(key, value)| {
+//                 let tx_hash = packed::Byte32::from_slice(value).expect("stored tx hash");
+//                 let block_number = u64::from_be_bytes(
+//                     key[key.len() - 17..key.len() - 9]
+//                         .try_into()
+//                         .expect("stored block_number"),
+//                 );
+//                 let tx_index = u32::from_be_bytes(
+//                     key[key.len() - 9..key.len() - 5]
+//                         .try_into()
+//                         .expect("stored tx_index"),
+//                 );
+//                 let io_index = u32::from_be_bytes(
+//                     key[key.len() - 5..key.len() - 1]
+//                         .try_into()
+//                         .expect("stored io_index"),
+//                 );
+//                 let io_type = if *key.last().expect("stored io_type") == 0 {
+//                     IOType::Input
+//                 } else {
+//                     IOType::Output
+//                 };
 
-                Tx {
-                    tx_hash: tx_hash.unpack(),
-                    block_number: block_number.into(),
-                    tx_index: tx_index.into(),
-                    io_index: io_index.into(),
-                    io_type,
-                }
-            })
-            .collect::<Vec<_>>();
+//                 Tx {
+//                     tx_hash: tx_hash.unpack(),
+//                     block_number: block_number.into(),
+//                     tx_index: tx_index.into(),
+//                     io_index: io_index.into(),
+//                     io_type,
+//                 }
+//             })
+//             .collect::<Vec<_>>();
 
-        let last_cursor = kvs.last().map_or_else(
-            || JsonBytes::default(),
-            |(last_key, _last_value)| JsonBytes::from_vec(last_key.clone().into()),
-        );
+//         let last_cursor = kvs.last().map_or_else(
+//             || JsonBytes::default(),
+//             |(last_key, _last_value)| JsonBytes::from_vec(last_key.clone().into()),
+//         );
 
-        Ok(Pagination {
-            objects: txs,
-            last_cursor,
-        })
-    }
-}
+//         Ok(Pagination {
+//             objects: txs,
+//             last_cursor,
+//         })
+//     }
+// }

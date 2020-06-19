@@ -24,8 +24,10 @@ pub struct DetailedLiveCell {
     pub cell_data: Bytes,
 }
 
-pub trait Indexer<T: Store> {
-    fn new(store: T, keep_num: u64, prune_interval: u64) -> Self;
+pub trait Indexer {
+    fn new(db_config: &str, keep_num: u64, prune_interval: u64) -> Result<Self, Error>
+    where
+        Self: Sized;
     fn append(&self, block: &BlockView) -> Result<(), Error>;
     fn rollback(&self) -> Result<(), Error>;
     fn tip(&self) -> Result<Option<(BlockNumber, Byte32)>, Error>;

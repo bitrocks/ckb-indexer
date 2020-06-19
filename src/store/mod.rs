@@ -1,7 +1,7 @@
 mod postgresql;
 mod rocksdb;
+pub use self::postgresql::PostgresqlStore;
 pub use self::rocksdb::RocksdbStore;
-
 #[derive(Debug)]
 pub enum Error {
     DBError(String),

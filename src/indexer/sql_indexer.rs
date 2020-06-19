@@ -1,11 +1,12 @@
 use super::Indexer;
 use super::*;
-use crate::store::{Batch, Error as StoreError, IteratorDirection, Store};
+use crate::store::{Batch, Error as StoreError, IteratorDirection, PostgresqlStore, Store};
 use ckb_types::{
     core::{BlockNumber, BlockView},
     packed::{Byte32, Bytes, CellOutput, OutPoint, Script},
     prelude::*,
 };
+use postgres::{Client, NoTls};
 use std::collections::HashMap;
 use std::convert::TryInto;
 
@@ -15,17 +16,17 @@ pub struct SqlIndexer<S> {
     prune_interval: u64,
 }
 
-impl<S> Indexer<S> for SqlIndexer<S>
-where
-    S: Store,
-{
-    fn new(store: S, keep_num: u64, prune_interval: u64) -> Self {
-        Self {
+impl Indexer for SqlIndexer<PostgresqlStore> {
+    fn new(db_config: &str, keep_num: u64, prune_interval: u64) -> Result<Self, Error> {
+        let client = Client::connect(db_config, NoTls).unwrap();
+        let store = PostgresqlStore::new(client)?;
+        Ok(Self {
             store,
             keep_num,
             prune_interval,
-        }
+        })
     }
+
     fn append(&self, block: &BlockView) -> Result<(), Error> {
         // 1. insert to block table
         // 2. insert to transaction table
