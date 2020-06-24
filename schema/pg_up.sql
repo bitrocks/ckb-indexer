@@ -1,14 +1,14 @@
 CREATE TABLE IF NOT EXISTS block_digests(
-    id SERIAL PRIMARY KEY,
+    block_number NUMERIC PRIMARY KEY,
     block_hash bytea UNIQUE NOT NULL,
-    block_number NUMERIC NOT NULL,
     parent_hash bytea NOT NULL
 );
-CREATE INDEX block_number ON block_digests(block_number);
 CREATE TABLE IF NOT EXISTS transaction_digests(
     id SERIAL PRIMARY KEY,
     tx_hash bytea UNIQUE NOT NULL,
-    block_id INTEGER REFERENCES block_digests(id) NOT NULL
+    tx_index INTEGER NOT NULL,
+    -- output_count INTEGER NOT NULL,
+    block_number NUMERIC NOT NULL REFERENCES block_digests(block_number) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS scripts(
     id SERIAL PRIMARY KEY,
@@ -17,22 +17,29 @@ CREATE TABLE IF NOT EXISTS scripts(
     hash_type INTEGER NOT NULL,
     args bytea
 );
+CREATE TABLE IF NOT EXISTS transaction_scripts(
+    id SERIAL PRIMARY KEY,
+    transaction_digest_id INTEGER NOT NULL REFERENCES transaction_digests(id) ON DELETE CASCADE,
+    script_id INTEGER NOT NULL REFERENCES scripts(id) ON DELETE CASCADE,
+    script_type INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS cells(
     id SERIAL PRIMARY KEY,
     capacity NUMERIC NOT NULL,
-    lock_script_id INTEGER REFERENCES scripts(id) NOT NULL,
-    type_script_id INTEGER REFERENCES scripts(id),
+    lock_script_id INTEGER NOT NULL REFERENCES scripts(id) ON DELETE CASCADE,
+    type_script_id INTEGER REFERENCES scripts(id) ON DELETE CASCADE,
     consumed boolean NOT NULL DEFAULT false,
-    tx_id INTEGER REFERENCES transaction_digests(id) NOT NULL,
+    transaction_digest_id INTEGER NOT NULL REFERENCES transaction_digests(id) ON DELETE CASCADE,
     tx_hash bytea NOT NULL,
     index INTEGER NOT NULL,
-    block_number NUMERIC NOT NULL,
+    block_number NUMERIC NOT NULL REFERENCES block_digests(block_number) ON DELETE CASCADE,
+    tx_index INTEGER NOT NULL,
     UNIQUE (tx_hash, index)
 );
 CREATE TABLE IF NOT EXISTS transaction_inputs(
     id SERIAL PRIMARY KEY,
-    tx_id INTEGER REFERENCES transaction_digests(id) NOT NULL,
-    tx_hash bytea NOT NULL,
-    index INTEGER NOT NULL,
-    UNIQUE (tx_hash, index)
+    transaction_digest_id INTEGER NOT NULL REFERENCES transaction_digests(id) ON DELETE CASCADE,
+    previous_tx_hash bytea NOT NULL,
+    previous_index INTEGER NOT NULL,
+    UNIQUE (previous_tx_hash, previous_index)
 );
