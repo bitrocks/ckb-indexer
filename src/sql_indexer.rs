@@ -11,8 +11,10 @@ use sqlx::PgPool;
 use sqlx_core::postgres::PgQueryAs;
 use std::convert::TryInto;
 pub type Result<T> = std::result::Result<T, sqlx::Error>;
-const LOCK_SCRIPT_TYPE: i32 = 0;
-const TYPE_SCRIPT_TYPE: i32 = 1;
+const SCRIPT_TYPE_LOCK: i32 = 0;
+const SCRIPT_TYPE_TYPE: i32 = 1;
+const IO_TYPE_INPUT: i32 = 0;
+const IO_TYPE_OUTPUT: i32 = 1;
 pub struct SqlIndexer {
     store: PgPool,
     // number of blocks to keep for rollback and forking, for example:
@@ -27,25 +29,10 @@ pub struct BlockDigest {
     block_hash: Vec<u8>,
 }
 
-#[derive(sqlx::FromRow)]
-pub struct TransactionDigest {
-    id: i32,
-    tx_hash: Vec<u8>,
-    tx_index: i32,
-    block_number: BigDecimal,
-}
-
-#[derive(sqlx::FromRow)]
-pub struct TransactionInput {
-    id: i32,
-    transaction_digest_id: i32,
-    previous_tx_hash: Vec<u8>,
-    previous_index: i32,
-}
 pub struct DetailedLiveCell {
     pub block_number: BlockNumber,
     pub block_hash: Byte32,
-    pub tx_index: TxIndex,
+    pub tx_index: u32,
     pub cell_output: CellOutput,
     pub cell_data: Bytes,
 }
@@ -88,13 +75,11 @@ impl SqlIndexer {
         let block_hash: Byte32 = block.hash();
 
         let block_number: BigDecimal = BigDecimal::from(block.number());
-        let parent_hash: Byte32 = block.parent_hash();
 
         sqlx::query!(
-            "INSERT INTO block_digests (block_hash, block_number, parent_hash) VALUES($1, $2, $3)",
+            "INSERT INTO block_digests (block_hash, block_number) VALUES($1, $2)",
             block_hash.as_slice(),
-            block_number,
-            parent_hash.as_slice()
+            block_number
         )
         .execute(&mut db_tx)
         .await?;
@@ -107,9 +92,10 @@ impl SqlIndexer {
 
             // insert transaction_digest
             let row = sqlx::query!(
-                "INSERT INTO transaction_digests (tx_hash, tx_index, block_number) VALUES ($1, $2, $3) returning id",
+                "INSERT INTO transaction_digests (tx_hash, tx_index, output_count, block_number) VALUES ($1, $2, $3, $4) returning id",
                 tx_hash.as_slice(),
                 tx_index,
+                tx.outputs().len() as i32,
                 block_number
             )
             .fetch_one(&mut db_tx)
@@ -123,14 +109,26 @@ impl SqlIndexer {
                     let out_point = input.previous_output();
                     let out_point_tx_hash = out_point.tx_hash();
                     // mark corresponding cell as comsumed
-                    sqlx::query!("UPDATE cells SET consumed = true WHERE tx_hash = $1 AND index = $2 AND consumed = false"
+                    let cell = sqlx::query!("UPDATE cells SET consumed = true WHERE tx_hash = $1 AND index = $2 AND consumed = false RETURNING *"
                     ,out_point_tx_hash.as_slice()
                     ,u32::from_le_bytes(out_point.index().as_slice().try_into().expect("slice with incorrect length")) as i32)
                     // FIXME
                     // , Unpack::<packed::Uint32>::unpack(&out_point.index().as_reader())
-                    .execute(&mut db_tx)
+                    .fetch_one(&mut db_tx)
                     .await?;
 
+                    // insert previous output into `transaction_scripts` table
+                    sqlx::query!("INSERT INTO transaction_scripts (script_type, io_type, index, transaction_digest_id, script_id) 
+                    VALUES($1,$2,$3,$4,$5)", 
+                    SCRIPT_TYPE_LOCK, IO_TYPE_INPUT, input_index, tx_id, cell.lock_script_id)
+                .execute(&mut db_tx).await?;
+
+                    if let Some(type_script_id) = cell.type_script_id {
+                        sqlx::query!("INSERT INTO transaction_scripts (script_type, io_type, index, transaction_digest_id, script_id) 
+                    VALUES($1,$2,$3,$4,$5)", 
+                    SCRIPT_TYPE_TYPE, IO_TYPE_INPUT, input_index, tx_id, type_script_id)
+                .execute(&mut db_tx).await?;
+                    }
                     // insert to `transaction_inputs` table
                     sqlx::query!("INSERT INTO transaction_inputs (transaction_digest_id, previous_tx_hash, previous_index) VALUES ($1, $2, $3)"
                     ,tx_id
@@ -168,11 +166,13 @@ impl SqlIndexer {
                 let lock_script_id = row.id;
 
                 // insert to transaction_scripts
-                sqlx::query!("INSERT INTO transaction_scripts (transaction_digest_id, script_id, script_type) VALUES ($1, $2, $3)", tx_id, lock_script_id, LOCK_SCRIPT_TYPE)
+                sqlx::query!("INSERT INTO transaction_scripts (script_type, io_type, index, transaction_digest_id, script_id) 
+                    VALUES($1,$2,$3,$4,$5)", 
+                    SCRIPT_TYPE_LOCK, IO_TYPE_OUTPUT, output_index, tx_id, lock_script_id)
                 .execute(&mut db_tx).await?;
 
                 // insert to scripts as type script
-                let type_script_id = if let Some(type_script) = output.type_().to_opt() {
+                if let Some(type_script) = output.type_().to_opt() {
                     let type_script_hash = type_script.calc_script_hash();
                     let code_hash = type_script.code_hash();
                     let hash_type = type_script.hash_type();
@@ -206,8 +206,10 @@ impl SqlIndexer {
                     tx_index)
                     .execute(&mut db_tx).await?;
                     // insert to transaction_scripts
-                    sqlx::query!("INSERT INTO transaction_scripts (transaction_digest_id, script_id, script_type) VALUES ($1, $2, $3)", tx_id, type_script_id, TYPE_SCRIPT_TYPE)
-                    .execute(&mut db_tx).await?
+                    sqlx::query!("INSERT INTO transaction_scripts (script_type, io_type, index, transaction_digest_id, script_id) 
+                    VALUES($1,$2,$3,$4,$5)", 
+                    SCRIPT_TYPE_TYPE, IO_TYPE_OUTPUT, output_index, tx_id, type_script_id)
+                .execute(&mut db_tx).await?
                 } else {
                     // insert to cell
                     sqlx::query!("INSERT INTO cells (capacity, lock_script_id, transaction_digest_id, tx_hash, index, block_number, tx_index) 
@@ -262,16 +264,14 @@ impl SqlIndexer {
         if let Some((block_number, _block_hash)) = self.tip().await? {
             let mut db_tx = self.store.begin().await?;
             let block_number: BigDecimal = BigDecimal::from(block_number);
-            let txs = sqlx::query_as!(
-                TransactionDigest,
+            let txs = sqlx::query!(
                 "SELECT * FROM transaction_digests WHERE block_number = $1 ORDER BY tx_index DESC",
                 block_number
             )
             .fetch_all(&mut db_tx)
             .await?;
             for tx in txs.into_iter() {
-                let tx_inputs = sqlx::query_as!(
-                    TransactionInput,
+                let tx_inputs = sqlx::query!(
                     "SELECT * FROM transaction_inputs WHERE transaction_digest_id = $1",
                     tx.id
                 )
