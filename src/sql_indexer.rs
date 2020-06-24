@@ -143,20 +143,18 @@ impl SqlIndexer {
                 // insert to scripts as lock script
                 let output_index: i32 = output_index as i32;
                 let lock_script = output.lock();
-                let lock_script_hash = lock_script.calc_script_hash();
                 let code_hash = lock_script.code_hash();
                 let hash_type = lock_script.hash_type();
                 let args = lock_script.args();
                 let row = sqlx::query!(
                     "WITH temp AS(
-                        INSERT INTO scripts (script_hash, code_hash, hash_type, args)
-                        VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING
+                        INSERT INTO scripts (code_hash, hash_type, args)
+                        VALUES ($1, $2, $3) ON CONFLICT DO NOTHING
                         RETURNING id
                     )
                     SELECT * FROM temp
                     UNION
-                    SELECT id FROM scripts WHERE script_hash = $1",
-                    lock_script_hash.as_slice(),
+                    SELECT id FROM scripts WHERE code_hash = $1 AND hash_type = $2 AND args = $3",
                     code_hash.as_slice(),
                     hash_type.as_slice()[0] as i32,
                     args.as_slice()
@@ -173,20 +171,18 @@ impl SqlIndexer {
 
                 // insert to scripts as type script
                 if let Some(type_script) = output.type_().to_opt() {
-                    let type_script_hash = type_script.calc_script_hash();
                     let code_hash = type_script.code_hash();
                     let hash_type = type_script.hash_type();
                     let args = type_script.args();
                     let row = sqlx::query!(
                         "WITH temp AS(
-                            INSERT INTO scripts (script_hash, code_hash, hash_type, args)
-                            VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING
+                            INSERT INTO scripts (code_hash, hash_type, args)
+                            VALUES ($1, $2, $3) ON CONFLICT DO NOTHING
                             RETURNING id
                         )
                         SELECT * FROM temp
                         UNION
-                        SELECT id FROM scripts WHERE script_hash = $1",
-                        type_script_hash.as_slice(),
+                        SELECT id FROM scripts WHERE code_hash = $1 AND hash_type = $2 AND args = $3",
                         code_hash.as_slice(),
                         hash_type.as_slice()[0] as i32,
                         args.as_slice()
@@ -350,14 +346,18 @@ impl SqlIndexer {
         &self,
         lock_script: &Script,
     ) -> Result<Vec<OutPoint>> {
-        let lock_script_hash = lock_script.calc_script_hash();
+        let code_hash = lock_script.code_hash();
+        let hash_type = lock_script.hash_type();
+        let args = lock_script.args();
         let cells = sqlx::query!(
             "
        SELECT tx_hash, index FROM cells 
        JOIN scripts 
-       ON cells.lock_script_id = scripts.id AND scripts.script_hash = $1 
+       ON cells.lock_script_id = scripts.id AND scripts.code_hash = $1 AND scripts.hash_type = $2 AND scripts.args = $3 
        ORDER BY cells.block_number ASC",
-            lock_script_hash.as_slice()
+            code_hash.as_slice(), 
+            hash_type.as_slice()[0] as i32,
+            args.as_slice()
         )
         .fetch_all(&self.store)
         .await?;
@@ -376,14 +376,18 @@ impl SqlIndexer {
         &self,
         type_script: &Script,
     ) -> Result<Vec<OutPoint>> {
-        let type_script_hash = type_script.calc_script_hash();
+        let code_hash = type_script.code_hash();
+        let hash_type = type_script.hash_type();
+        let args = type_script.args();
         let cells = sqlx::query!(
             "
-        SELECT tx_hash, index FROM cells 
-        JOIN scripts 
-        ON cells.type_script_id = scripts.id AND scripts.script_hash = $1 
-        ORDER BY cells.block_number ASC",
-            type_script_hash.as_slice()
+       SELECT tx_hash, index FROM cells 
+       JOIN scripts 
+       ON cells.type_script_id = scripts.id AND scripts.code_hash = $1 AND scripts.hash_type = $2 AND scripts.args = $3 
+       ORDER BY cells.block_number ASC",
+            code_hash.as_slice(), 
+            hash_type.as_slice()[0] as i32,
+            args.as_slice()
         )
         .fetch_all(&self.store)
         .await?;
@@ -403,16 +407,20 @@ impl SqlIndexer {
         &self,
         lock_script: &Script,
     ) -> Result<Vec<Byte32>> {
-        let lock_script_hash = lock_script.calc_script_hash();
+        let code_hash = lock_script.code_hash();
+        let hash_type = lock_script.hash_type();
+        let args = lock_script.args();
         let tx_hashs = sqlx::query!(
             "
         SELECT tx_hash FROM transaction_digests 
         JOIN transaction_scripts 
         ON transaction_digests.id = transaction_scripts.transaction_digest_id 
         JOIN scripts 
-        ON transaction_scripts.script_id = scripts.id AND scripts.script_hash = $1
+        ON transaction_scripts.script_id = scripts.id AND scripts.code_hash = $1 AND scripts.hash_type = $2 AND scripts.args = $3 
         ORDER BY transaction_digests.block_number ASC",
-            lock_script_hash.as_slice()
+            code_hash.as_slice(), 
+            hash_type.as_slice()[0] as i32,
+            args.as_slice()
         )
         .fetch_all(&self.store)
         .await?;
@@ -428,16 +436,20 @@ impl SqlIndexer {
         &self,
         type_script: &Script,
     ) -> Result<Vec<Byte32>> {
-        let type_script_hash = type_script.calc_script_hash();
+        let code_hash = type_script.code_hash();
+        let hash_type = type_script.hash_type();
+        let args = type_script.args();
         let tx_hashs = sqlx::query!(
             "
         SELECT tx_hash FROM transaction_digests 
         JOIN transaction_scripts 
         ON transaction_digests.id = transaction_scripts.transaction_digest_id 
         JOIN scripts 
-        ON transaction_scripts.script_id = scripts.id AND scripts.script_hash = $1
+        ON transaction_scripts.script_id = scripts.id AND scripts.code_hash = $1 AND scripts.hash_type = $2 AND scripts.args = $3 
         ORDER BY transaction_digests.block_number ASC",
-            type_script_hash.as_slice()
+            code_hash.as_slice(), 
+            hash_type.as_slice()[0] as i32,
+            args.as_slice()
         )
         .fetch_all(&self.store)
         .await?;

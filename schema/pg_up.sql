@@ -18,12 +18,11 @@ CREATE TABLE IF NOT EXISTS transaction_inputs(
 );
 CREATE TABLE IF NOT EXISTS scripts(
     id SERIAL PRIMARY KEY,
-    script_hash bytea UNIQUE NOT NULL,
     code_hash bytea NOT NULL,
     hash_type INTEGER NOT NULL,
-    args bytea
+    args bytea,
+    UNIQUE (code_hash, hash_type, args)
 );
-CREATE INDEX code_hash_hash_type ON scripts (code_hash, hash_type);
 CREATE TABLE IF NOT EXISTS transaction_scripts(
     id SERIAL PRIMARY KEY,
     script_type INTEGER NOT NULL,
