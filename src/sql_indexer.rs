@@ -354,11 +354,7 @@ impl SqlIndexer {
        SELECT tx_hash, index FROM cells 
        JOIN scripts 
        ON cells.lock_script_id = scripts.id AND scripts.code_hash = $1 AND scripts.hash_type = $2 AND scripts.args = $3 
-       ORDER BY cells.block_number ASC",
-            code_hash.as_slice(), 
-            hash_type.as_slice()[0] as i32,
-            args.as_slice()
-        )
+       ORDER BY cells.block_number ASC",code_hash.as_slice(), hash_type.as_slice()[0] as i32,args.as_slice())
         .fetch_all(&self.store)
         .await?;
         let mut out_points: Vec<OutPoint> = vec![];
