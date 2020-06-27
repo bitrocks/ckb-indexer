@@ -1,13 +1,30 @@
 ## Usage
 
-```bash
+### RocksDB
+
+``` bash
 cargo build --release
-RUST_LOG=info ./target/release/ckb-indexer -s /tmp/ckb-indexer-test
+RUST_LOG=info ./target/release/ckb-indexer rocksdb -s /tmp/ckb-indexer-test
+```
+
+### PostgreSQL
+
+1. config db
+
+``` 
+psql -d postgres://user:password@localhost/ckb_indexer -f schema/pg_up.sql 
+```
+
+2. run cli
+
+``` 
+cargo build --release
+RUST_LOG=info ./target/release/ckb-indexer postgresql -d postgres:://user::password@localhost/ckb_indexer
 ```
 
 ## RPC
 
-### `get_cells`
+### `get_cells` 
 
 Returns the live cells collection by the lock or type script.
 
@@ -21,7 +38,6 @@ Returns the live cells collection by the lock or type script.
     limit: result size limit
     after_cursor: pagination parameter, optional
 
-
 #### Returns
 
     objects - live cells
@@ -29,7 +45,7 @@ Returns the live cells collection by the lock or type script.
 
 #### Examples
 
-```bash
+``` bash
 echo '{
     "id": 2,
     "jsonrpc": "2.0",
@@ -52,7 +68,7 @@ echo '{
 http://localhost:8116
 ```
 
-### `get_transactions`
+### `get_transactions` 
 
 Returns the transactions collection by the lock or type script.
 
@@ -66,7 +82,6 @@ Returns the transactions collection by the lock or type script.
     limit: result size limit
     after_cursor: pagination parameter, optional
 
-
 #### Returns
 
     objects - transactions
@@ -74,7 +89,7 @@ Returns the transactions collection by the lock or type script.
 
 #### Examples
 
-```bash
+``` bash
 echo '{
     "id": 2,
     "jsonrpc": "2.0",
