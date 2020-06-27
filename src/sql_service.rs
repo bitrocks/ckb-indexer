@@ -1,17 +1,9 @@
 use crate::sql_indexer::{Result, SqlIndexer};
 use ckb_jsonrpc_types::{BlockNumber, BlockView};
-use ckb_types::{packed, prelude::*, H256};
 use futures::future::Future;
-use jsonrpc_core::{Error, IoHandler, Result as RpcResult};
 use jsonrpc_derive::rpc;
-use jsonrpc_http_server::{Server, ServerBuilder};
-use jsonrpc_server_utils::cors::AccessControlAllowOrigin;
-use jsonrpc_server_utils::hosts::DomainsValidation;
 use log::info;
-use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use std::convert::TryInto;
-use std::net::ToSocketAddrs;
 use std::thread;
 use std::time::Duration;
 

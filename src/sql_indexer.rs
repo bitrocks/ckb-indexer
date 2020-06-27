@@ -1,15 +1,11 @@
-use crate::store::{Batch, Error as StoreError, IteratorDirection, Store};
-use async_std::task;
-use bigdecimal::BigDecimal;
-use bigdecimal::ToPrimitive;
+use bigdecimal::{BigDecimal, ToPrimitive};
 use ckb_types::{
     core::{BlockNumber, BlockView},
-    packed::{self, Byte, Byte32, Bytes, CellOutput, OutPoint, Script, ScriptOpt, Uint32, Uint64},
+    packed::{Byte, Byte32, Bytes, CellOutput, OutPoint, Script, ScriptOpt, Uint32},
     prelude::*,
 };
 use sqlx::PgPool;
 use sqlx_core::postgres::PgQueryAs;
-use std::convert::TryInto;
 pub type Result<T> = std::result::Result<T, sqlx::Error>;
 const SCRIPT_TYPE_LOCK: i32 = 0;
 const SCRIPT_TYPE_TYPE: i32 = 1;
@@ -30,6 +26,7 @@ pub struct BlockDigest {
     block_hash: Vec<u8>,
 }
 
+#[derive(Debug)]
 pub struct DetailedLiveCell {
     pub block_number: BlockNumber,
     pub block_hash: Byte32,
@@ -112,9 +109,7 @@ impl SqlIndexer {
                     // mark corresponding cell as comsumed
                     let cell = sqlx::query!("UPDATE cells SET consumed = true WHERE tx_hash = $1 AND index = $2 AND consumed = false RETURNING *"
                     ,out_point_tx_hash.as_slice()
-                    ,u32::from_le_bytes(out_point.index().as_slice().try_into().expect("slice with incorrect length")) as i32)
-                    // FIXME
-                    // , Unpack::<packed::Uint32>::unpack(&out_point.index().as_reader())
+                    ,Unpack::<u32>::unpack(&out_point.index()) as i32)
                     .fetch_one(&mut db_tx)
                     .await?;
 
@@ -355,17 +350,23 @@ impl SqlIndexer {
             "
        SELECT tx_hash, index FROM cells 
        JOIN scripts 
-       ON cells.lock_script_id = scripts.id AND scripts.code_hash = $1 AND scripts.hash_type = $2 AND scripts.args = $3 
-       ORDER BY cells.block_number ASC",code_hash.as_slice(), hash_type.as_slice()[0] as i32,args.as_slice())
+       ON cells.lock_script_id = scripts.id AND cells.consumed = false 
+       WHERE scripts.code_hash = $1 AND scripts.hash_type = $2 AND scripts.args = $3
+       ORDER BY cells.block_number ASC",
+            code_hash.as_slice(),
+            hash_type.as_slice()[0] as i32,
+            args.as_slice()
+        )
         .fetch_all(&self.store)
         .await?;
         let mut out_points: Vec<OutPoint> = vec![];
         for cell in cells.into_iter() {
-            let index = cell.index;
+            let index: Uint32 = (cell.index as u32).pack();
             let tx_hash: Byte32 = Byte32::from_slice(&cell.tx_hash).unwrap();
-            // FIXME: i32 to Uint32
-            //    let index: Uint32 =  Uint32::from_slice(index::to_le_bytes()).unwrap();
-            let out_point = OutPoint::new_builder().tx_hash(tx_hash).build();
+            let out_point = OutPoint::new_builder()
+                .tx_hash(tx_hash)
+                .index(index)
+                .build();
             out_points.push(out_point)
         }
         Ok(out_points)
@@ -381,18 +382,23 @@ impl SqlIndexer {
             "
        SELECT tx_hash, index FROM cells 
        JOIN scripts 
-       ON cells.type_script_id = scripts.id AND scripts.code_hash = $1 AND scripts.hash_type = $2 AND scripts.args = $3 
-       ORDER BY cells.block_number ASC",code_hash.as_slice(), hash_type.as_slice()[0] as i32,args.as_slice()
+       ON cells.type_script_id = scripts.id AND cells.consumed = false 
+       WHERE scripts.code_hash = $1 AND scripts.hash_type = $2 AND scripts.args = $3 
+       ORDER BY cells.block_number ASC",
+            code_hash.as_slice(),
+            hash_type.as_slice()[0] as i32,
+            args.as_slice()
         )
         .fetch_all(&self.store)
         .await?;
         let mut out_points: Vec<OutPoint> = vec![];
         for cell in cells.into_iter() {
-            let index = cell.index;
+            let index: Uint32 = (cell.index as u32).pack();
             let tx_hash: Byte32 = Byte32::from_slice(&cell.tx_hash).unwrap();
-            // FIXME: i32 to Uint32
-            //    let index: Uint32 =  Uint32::from_slice(index::to_le_bytes()).unwrap();
-            let out_point = OutPoint::new_builder().tx_hash(tx_hash).build();
+            let out_point = OutPoint::new_builder()
+                .tx_hash(tx_hash)
+                .index(index)
+                .build();
             out_points.push(out_point)
         }
         Ok(out_points)
@@ -411,8 +417,13 @@ impl SqlIndexer {
         JOIN transaction_scripts 
         ON transaction_digests.id = transaction_scripts.transaction_digest_id 
         JOIN scripts 
-        ON transaction_scripts.script_id = scripts.id AND scripts.code_hash = $1 AND scripts.hash_type = $2 AND scripts.args = $3 
-        ORDER BY transaction_digests.block_number ASC",code_hash.as_slice(),hash_type.as_slice()[0] as i32,args.as_slice())
+        ON transaction_scripts.script_id = scripts.id 
+        WHERE scripts.code_hash = $1 AND scripts.hash_type = $2 AND scripts.args = $3 
+        ORDER BY transaction_digests.block_number ASC",
+            code_hash.as_slice(),
+            hash_type.as_slice()[0] as i32,
+            args.as_slice()
+        )
         .fetch_all(&self.store)
         .await?;
         let mut tx_hashs_byte32: Vec<Byte32> = vec![];
@@ -436,8 +447,12 @@ impl SqlIndexer {
         JOIN transaction_scripts 
         ON transaction_digests.id = transaction_scripts.transaction_digest_id 
         JOIN scripts 
-        ON transaction_scripts.script_id = scripts.id AND scripts.code_hash = $1 AND scripts.hash_type = $2 AND scripts.args = $3 
-        ORDER BY transaction_digests.block_number ASC",code_hash.as_slice(), hash_type.as_slice()[0] as i32,args.as_slice()
+        ON transaction_scripts.script_id = scripts.id 
+        WHERE scripts.code_hash = $1 AND scripts.hash_type = $2 AND scripts.args = $3 
+        ORDER BY transaction_digests.block_number ASC",
+            code_hash.as_slice(),
+            hash_type.as_slice()[0] as i32,
+            args.as_slice()
         )
         .fetch_all(&self.store)
         .await?;
@@ -461,50 +476,15 @@ impl SqlIndexer {
             JOIN block_digests ON cells.block_number = block_digests.block_number
             WHERE cells.tx_hash = $1 AND cells.index = $2",
             tx_hash.as_slice(),
-            u32::from_le_bytes(
-                index
-                    .as_slice()
-                    .try_into()
-                    .expect("slice with incorrect length")
-            ) as i32
+            Unpack::<u32>::unpack(&index) as i32
         )
         .fetch_optional(&self.store)
         .await?;
         match cell {
             Some(cell) => {
-                let lock_script =
-                    sqlx::query!("SELECT * FROM scripts WHERE id = $1", cell.lock_script_id)
-                        .fetch_one(&self.store)
-                        .await?;
-                let type_script =
-                    sqlx::query!("SELECT * FROM scripts WHERE id = $1", cell.type_script_id)
-                        .fetch_optional(&self.store)
-                        .await?;
-                let code_hash = Byte32::from_slice(lock_script.code_hash.as_slice()).unwrap();
-                let hash_type = Byte::new(lock_script.hash_type as u8);
-                let args = if let Some(args) = lock_script.args {
-                    Bytes::from_slice(args.as_slice()).unwrap()
-                } else {
-                    Bytes::from_slice(&[]).unwrap()
-                };
-                let lock_script = Script::new_builder()
-                    .code_hash(code_hash)
-                    .hash_type(hash_type)
-                    .args(args)
-                    .build();
-                let type_script_opt = if let Some(type_script) = type_script {
-                    let code_hash = Byte32::from_slice(type_script.code_hash.as_slice()).unwrap();
-                    let hash_type = Byte::new(type_script.hash_type as u8);
-                    let args = if let Some(args) = type_script.args {
-                        Bytes::from_slice(args.as_slice()).unwrap()
-                    } else {
-                        Bytes::from_slice(&[]).unwrap()
-                    };
-                    let type_script = Script::new_builder()
-                        .code_hash(code_hash)
-                        .hash_type(hash_type)
-                        .args(args)
-                        .build();
+                let lock_script = self.get_script_by_id(cell.lock_script_id).await?;
+                let type_script_opt = if let Some(type_script_id) = cell.type_script_id {
+                    let type_script = self.get_script_by_id(type_script_id).await?;
                     ScriptOpt::new_builder().set(Some(type_script)).build()
                 } else {
                     ScriptOpt::new_builder().set(None).build()
@@ -515,7 +495,7 @@ impl SqlIndexer {
                 let cell_data = if let Some(data) = cell.data {
                     Bytes::from_slice(data.as_slice()).unwrap()
                 } else {
-                    Bytes::from_slice(&[]).unwrap()
+                    Bytes::default()
                 };
                 let cell_output = CellOutput::new_builder()
                     .capacity(capacity)
@@ -534,11 +514,31 @@ impl SqlIndexer {
             None => Ok(None),
         }
     }
+
+    async fn get_script_by_id(&self, script_id: i32) -> Result<Script> {
+        let lock_script = sqlx::query!("SELECT * FROM scripts WHERE id = $1", script_id)
+            .fetch_one(&self.store)
+            .await?;
+        let code_hash = Byte32::from_slice(lock_script.code_hash.as_slice()).unwrap();
+        let hash_type = Byte::new(lock_script.hash_type as u8);
+        let args = if let Some(args) = lock_script.args {
+            Bytes::from_slice(args.as_slice()).unwrap()
+        } else {
+            Bytes::from_slice(&[]).unwrap()
+        };
+        let script = Script::new_builder()
+            .code_hash(code_hash)
+            .hash_type(hash_type)
+            .args(args)
+            .build();
+        Ok(script)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_std::task;
     use ckb_jsonrpc_types::{BlockNumber, BlockView};
     use futures::Future;
     use hyper::rt;
@@ -552,7 +552,7 @@ mod tests {
     }
 
     async fn get_sql_indexer() -> Result<SqlIndexer> {
-        let database_url = "postgres://hupeng:default@localhost/ckb_indexer";
+        let database_url = "postgres://hupeng:default@localhost/ckb_indexer_dev";
         let pool = PgPool::builder().build(database_url).await?;
         Ok(SqlIndexer::new(pool, 100, 10000))
     }
@@ -629,40 +629,54 @@ mod tests {
     }
 
     #[test]
-    fn append_and_rollback_to_empty() {}
-
-    #[test]
-    fn get_live_cells_by_lock_script_works() {
+    fn get_live_cells_by_script_works() {
         task::block_on(async {
             let indexer = get_sql_indexer().await.unwrap();
-            println!("indexer: {:?}", indexer);
-            let cell = sqlx::query!("SELECT * FROM cells LIMIT 1")
-                .fetch_one(&indexer.store)
-                .await
-                .unwrap();
-            println!("cell: {:?}", cell);
+            // by lock_script
             let lock_script_id = 1;
-            let lock_script = sqlx::query!("SELECT * FROM scripts WHERE id = $1", lock_script_id)
-                .fetch_one(&indexer.store)
-                .await
-                .unwrap();
-            let code_hash = Byte32::from_slice(lock_script.code_hash.as_slice()).unwrap();
-            let hash_type = Byte::new(lock_script.hash_type as u8);
-            let args = if let Some(args) = lock_script.args {
-                Bytes::from_slice(args.as_slice()).unwrap()
-            } else {
-                Bytes::from_slice(&[]).unwrap()
-            };
-            let lock_script = Script::new_builder()
-                .code_hash(code_hash)
-                .hash_type(hash_type)
-                .args(args)
-                .build();
-            let cells = indexer
+            let lock_script = indexer.get_script_by_id(lock_script_id).await.unwrap();
+            let out_points = indexer
                 .get_live_cells_by_lock_script(&lock_script)
                 .await
                 .unwrap();
+            assert_eq!(out_points.len(), 7);
 
+            // by type_script
+            let type_script_id = 757;
+            let type_script = indexer.get_script_by_id(type_script_id).await.unwrap();
+            let out_points = indexer
+                .get_live_cells_by_type_script(&type_script)
+                .await
+                .unwrap();
+            // get_detailed_live_cell
+            let detailed_live_cell = indexer
+                .get_detailed_live_cell(&out_points[0])
+                .await
+                .unwrap();
+            println!("Detailed live cell: {:?}", detailed_live_cell);
+            assert_eq!(out_points.len(), 7);
+        })
+    }
+
+    #[test]
+    fn get_transactions_by_script_works() {
+        task::block_on(async {
+            let indexer = get_sql_indexer().await.unwrap();
+            let lock_script_id = 1;
+            let lock_script = indexer.get_script_by_id(lock_script_id).await.unwrap();
+            let txs = indexer
+                .get_transactions_by_lock_script(&lock_script)
+                .await
+                .unwrap();
+            println!("txs: {}", txs[0]);
+            assert_eq!(txs.len(), 7);
+            let type_script_id = 757;
+            let type_script = indexer.get_script_by_id(type_script_id).await.unwrap();
+            let cells = indexer
+                .get_transactions_by_type_script(&type_script)
+                .await
+                .unwrap();
+            println!("cells: {}", cells[0]);
             assert_eq!(cells.len(), 7);
         })
     }
