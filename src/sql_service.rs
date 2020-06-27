@@ -28,7 +28,7 @@ impl SqlService {
     }
 
     pub async fn poll(&self, rpc_client: gen_client::Client) -> Result<()> {
-        let indexer = SqlIndexer::new(self.store.clone(), 100, 10000);
+        let indexer = SqlIndexer::new(self.store.clone(), 100, 1000);
         loop {
             if let Some((tip_number, tip_hash)) = indexer.tip().await? {
                 if let Ok(Some(block)) = rpc_client

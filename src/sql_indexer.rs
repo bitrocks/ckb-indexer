@@ -5,7 +5,6 @@ use ckb_types::{
     prelude::*,
 };
 use sqlx::PgPool;
-use sqlx_core::postgres::PgQueryAs;
 pub type Result<T> = std::result::Result<T, sqlx::Error>;
 const SCRIPT_TYPE_LOCK: i32 = 0;
 const SCRIPT_TYPE_TYPE: i32 = 1;
@@ -71,9 +70,7 @@ impl SqlIndexer {
     pub async fn append(&self, block: &BlockView) -> Result<()> {
         let mut db_tx = self.store.begin().await?;
         let block_hash: Byte32 = block.hash();
-
         let block_number: BigDecimal = BigDecimal::from(block.number());
-
         sqlx::query!(
             "INSERT INTO block_digests (block_hash, block_number) VALUES($1, $2)",
             block_hash.as_slice(),
@@ -81,13 +78,10 @@ impl SqlIndexer {
         )
         .execute(&mut db_tx)
         .await?;
-
         let transactions = block.transactions();
-
         for (tx_index, tx) in transactions.iter().enumerate() {
             let tx_index: i32 = tx_index as i32;
             let tx_hash: Byte32 = tx.hash();
-
             // insert transaction_digest
             let row = sqlx::query!(
                 "INSERT INTO transaction_digests (tx_hash, tx_index, output_count, block_number) VALUES ($1, $2, $3, $4) returning id",
@@ -98,7 +92,6 @@ impl SqlIndexer {
             )
             .fetch_one(&mut db_tx)
             .await?;
-
             let tx_id = row.id;
 
             if tx_index > 0 {
@@ -107,23 +100,18 @@ impl SqlIndexer {
                     let out_point = input.previous_output();
                     let out_point_tx_hash = out_point.tx_hash();
                     // mark corresponding cell as comsumed
-                    let cell = sqlx::query!("UPDATE cells SET consumed = true WHERE tx_hash = $1 AND index = $2 AND consumed = false RETURNING *"
-                    ,out_point_tx_hash.as_slice()
-                    ,Unpack::<u32>::unpack(&out_point.index()) as i32)
+                    let cell = sqlx::query!("UPDATE cells SET consumed = true WHERE tx_hash = $1 AND index = $2 AND consumed = false RETURNING *" ,out_point_tx_hash.as_slice() ,Unpack::<u32>::unpack(&out_point.index()) as i32)
                     .fetch_one(&mut db_tx)
                     .await?;
-
                     // insert previous output into `transaction_scripts` table
                     sqlx::query!("INSERT INTO transaction_scripts (script_type, io_type, index, transaction_digest_id, script_id) 
-                    VALUES($1,$2,$3,$4,$5)", 
-                    SCRIPT_TYPE_LOCK, IO_TYPE_INPUT, input_index, tx_id, cell.lock_script_id)
-                .execute(&mut db_tx).await?;
+                    VALUES($1,$2,$3,$4,$5)", SCRIPT_TYPE_LOCK, IO_TYPE_INPUT, input_index, tx_id, cell.lock_script_id)
+                    .execute(&mut db_tx).await?;
 
                     if let Some(type_script_id) = cell.type_script_id {
                         sqlx::query!("INSERT INTO transaction_scripts (script_type, io_type, index, transaction_digest_id, script_id) 
-                    VALUES($1,$2,$3,$4,$5)", 
-                    SCRIPT_TYPE_TYPE, IO_TYPE_INPUT, input_index, tx_id, type_script_id)
-                .execute(&mut db_tx).await?;
+                    VALUES($1,$2,$3,$4,$5)",  SCRIPT_TYPE_TYPE, IO_TYPE_INPUT, input_index, tx_id, type_script_id)
+                    .execute(&mut db_tx).await?;
                     }
                     // insert to `transaction_inputs` table
                     sqlx::query!("INSERT INTO transaction_inputs (transaction_digest_id, previous_tx_hash, previous_index) VALUES ($1, $2, $3)"
@@ -158,7 +146,6 @@ impl SqlIndexer {
                 .fetch_one(&mut db_tx)
                 .await?;
                 let lock_script_id = row.id;
-
                 // insert to transaction_scripts
                 sqlx::query!("INSERT INTO transaction_scripts (script_type, io_type, index, transaction_digest_id, script_id) 
                     VALUES($1,$2,$3,$4,$5)", 
@@ -320,19 +307,16 @@ impl SqlIndexer {
     ///
     /// It propagates sqlx::Error
     pub async fn tip(&self) -> Result<Option<(BlockNumber, Byte32)>> {
-        let block_info = sqlx::query_as::<_, BlockDigest>(
+        let block_info = sqlx::query!(
             "SELECT block_number,block_hash FROM block_digests ORDER BY block_number DESC LIMIT 1",
         )
         .fetch_optional(&self.store)
         .await?;
 
         match block_info {
-            Some(BlockDigest {
-                block_number,
-                block_hash,
-            }) => {
-                let block_number_u64 = block_number.to_u64().unwrap();
-                let block_hash_byte32 = Byte32::from_slice(&block_hash).unwrap();
+            Some(block_info) => {
+                let block_number_u64 = block_info.block_number.to_u64().unwrap();
+                let block_hash_byte32 = Byte32::from_slice(&block_info.block_hash).unwrap();
                 Ok(Some((block_number_u64, block_hash_byte32)))
             }
             None => Ok(None),
@@ -554,29 +538,32 @@ mod tests {
     async fn get_sql_indexer() -> Result<SqlIndexer> {
         let database_url = "postgres://hupeng:default@localhost/ckb_indexer_dev";
         let pool = PgPool::builder().build(database_url).await?;
-        Ok(SqlIndexer::new(pool, 100, 10000))
-    }
-
-    async fn get_tip() -> Result<Option<u64>> {
-        let indexer = get_sql_indexer().await?;
-        let tip_block = indexer.tip().await?;
-        match tip_block {
-            Some((block_number, _block_hash)) => Ok(Some(block_number)),
-            None => Ok(None),
-        }
+        Ok(SqlIndexer::new(pool, 100, 1000))
     }
 
     #[test]
-    fn query_table_works() {
+    fn query_tip_works() {
         task::block_on(async {
-            let future = get_tip().await;
-            match future {
-                Ok(Some(block_number)) => println!("block_number: {:?}", block_number),
-                Ok(None) => println!("No block found"),
-                Err(e) => println!("Error: {:?}", e),
+            let indexer = get_sql_indexer().await.unwrap();
+            let tip_block = indexer.tip().await.unwrap();
+            match tip_block {
+                Some((block_number, block_hash)) => println!("block_number: {:?}", block_number),
+                None => println!("No block found"),
             }
         });
         assert!(false)
+    }
+
+    #[test]
+    fn prune_works() {
+        task::block_on(async {
+            let indexer = get_sql_indexer().await.unwrap();
+            let future = indexer.prune().await;
+            match future {
+                Ok(()) => println!("Done"),
+                Err(e) => println!("Error: {:?}", e),
+            }
+        })
     }
 
     #[test]
@@ -588,11 +575,9 @@ mod tests {
             http::connect(uri)
                 .and_then(move |client: gen_client::Client| {
                     task::block_on(async {
-                        let database_url = "postgres://hupeng:default@localhost/ckb_indexer_dev";
-                        let pool = PgPool::builder().build(database_url).await.unwrap();
-                        let indexer = SqlIndexer::new(pool, 100, 10000);
+                        let indexer = get_sql_indexer().await.unwrap();
                         println!("Before------------------");
-                        if let Ok(Some(block)) = client.get_block_by_number(0.into()).wait() {
+                        if let Ok(Some(block)) = client.get_block_by_number(1001.into()).wait() {
                             println!("block: {:?}", block);
                             let result = indexer.append(&block.into()).await;
                             match result {
@@ -615,9 +600,7 @@ mod tests {
         // TODO
         // Change to local test
         task::block_on(async {
-            let database_url = "postgres://hupeng:default@localhost/ckb_indexer_dev";
-            let pool = PgPool::builder().build(database_url).await.unwrap();
-            let indexer = SqlIndexer::new(pool, 100, 10000);
+            let indexer = get_sql_indexer().await.unwrap();
             println!("Before------------------");
             let result = indexer.rollback().await;
             match result {
