@@ -42,5 +42,6 @@ CREATE TABLE IF NOT EXISTS cells(
     index INTEGER NOT NULL,
     block_number NUMERIC NOT NULL REFERENCES block_digests(block_number) ON DELETE CASCADE,
     tx_index INTEGER NOT NULL,
+    data bytea,
     UNIQUE (tx_hash, index)
 );
