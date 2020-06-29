@@ -1,0 +1,1 @@
+psql -d postgres://hupeng:@localhost/ckb_indexer_dev -f schema/pg_up.sql
